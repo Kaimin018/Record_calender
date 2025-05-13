@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog # 導入 filedialog
+from tkinter import ttk, messagebox, filedialog
 import customtkinter
 from tkcalendar import Calendar
 import json
@@ -8,10 +8,16 @@ from datetime import datetime, date
 import webbrowser
 import re
 import tkinter.font as tkfont
-import openpyxl # 導入 openpyxl
+import openpyxl
+import threading
+from PIL import Image, ImageTk
+import platform
 
 # 儲存待辦事項的檔案名稱
-DATA_FILE = 'todo_calendar_advanced_gui.json'
+# ****** 修改：使用腳本檔案所在的絕對路徑 ******
+SCRIPT_DIR = os.path.dirname(__file__)
+DATA_FILE = os.path.join(SCRIPT_DIR, 'todo_calendar_advanced_gui.json')
+
 
 # 設定 customtkinter 的外觀模式 ('System'/'Dark'/'Light') 和顏色主題 ('blue'/'green'/'dark-blue')
 customtkinter.set_appearance_mode("System")
@@ -20,42 +26,55 @@ customtkinter.set_default_color_theme("blue")
 # 定義所有可能的狀態
 STATUS_OPTIONS = ["pending", "completed", "cancelled", "on hold", "in progress"]
 
+# 將 save_tasks 函數放在類別外面
+def save_tasks(tasks):
+    """將待辦事項儲存到檔案"""
+    try:
+        # print(f"Attempting to save to: {DATA_FILE}") # 可以在需要時取消註釋進行除錯
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(tasks, f, indent=4, ensure_ascii=False)
+        # print("Save successful.") # 可以在需要時取消註釋進行除錯
+        return True # 儲存成功時返回 True
+    except Exception as e:
+        print(f"Error saving tasks: {e}") # 在控制台打印錯誤
+        return False, e # 儲存失敗時返回 False 和錯誤
+
+
 def load_tasks():
     """從檔案載入待辦事項"""
     tasks = []
+    # print(f"Attempting to load from: {DATA_FILE}") # 可以在需要時取消註釋進行除錯
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 tasks = json.load(f)
-            # 確保每個任務都有一個唯一的 ID 和必要的欄位
+            # print("Load successful.") # 可以在需要時取消註釋進行除錯
             current_id = 0
             valid_tasks = []
             for task in tasks:
-                 # 檢查是否是有效的字典且至少有 description
                  if isinstance(task, dict) and 'description' in task:
-                    # 賦予或確保有 ID
                     if 'id' not in task or not isinstance(task['id'], (int, float)):
-                        task['id'] = current_id # 如果沒有 ID 或不是數字，分配新的
-                    # 確保 ID 是整數用於比較
+                        task['id'] = current_id
                     task['id'] = int(task['id'])
 
-                    # 確保其他欄位存在
                     if 'due_date' not in task:
                         task['due_date'] = None
+                    if 'creation_time' not in task:
+                         task['creation_time'] = None
                     if 'status' not in task or task['status'] not in STATUS_OPTIONS:
-                         task['status'] = 'pending' # 補上狀態或使用預設狀態
+                         task['status'] = 'pending'
                     if 'note' not in task:
-                         task['note'] = '' # 補上 note 欄位 (空字串)
-                    elif task['note'] is None: # 處理 note 為 None 的情況
                          task['note'] = ''
+                    elif task['note'] is None:
+                         task['note'] = ''
+                    if 'image_path' not in task:
+                         task['image_path'] = None
 
                     valid_tasks.append(task)
-                    current_id = max(current_id, task['id']) # 找出當前最大 ID
+                    current_id = max(current_id, task['id'])
 
             tasks = valid_tasks
-
-            # 為了新增時分配新 ID，需要一個計數器
-            load_tasks.counter = current_id + 1 if tasks else 0 # 設定一個函式屬性來儲存下一個可用的 ID
+            load_tasks.counter = current_id + 1 if tasks else 0
         except json.JSONDecodeError:
             messagebox.showwarning("警告", "無法解析待辦事項檔案，將建立新的檔案。")
             load_tasks.counter = 0
@@ -63,61 +82,205 @@ def load_tasks():
             messagebox.showerror("錯誤", f"載入檔案時發生錯誤: {e}")
             load_tasks.counter = 0
     else:
-         load_tasks.counter = 0 # 如果檔案不存在，從 0 開始計數
+         load_tasks.counter = 0
+         # print(f"Data file not found at {DATA_FILE}.") # 可以在需要時取消註釋進行除錯
     return tasks
 
-# 載入時初始化計數器
 load_tasks.counter = 0
-
-
-def save_tasks(tasks):
-    """將待辦事項儲存到檔案"""
-    try:
-        # 在儲存前，確保 ID 可以被序列化 (這裡 ID 已經是數字，沒問題)
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(tasks, f, indent=4, ensure_ascii=False)
-        # print("Tasks saved.") # 調試用
-    except Exception as e:
-        messagebox.showerror("錯誤", f"儲存檔案時發生錯誤: {e}")
 
 def get_next_id():
     """取得下一個可用的唯一 ID"""
-    # 這裡直接用一個簡單的遞增計數器
     task_id = load_tasks.counter
     load_tasks.counter += 1
     return task_id
 
+# ****** 輔助函數：格式化日期時間 ******
+def format_datetime(dt_str):
+    """格式化-MM-DD HH:MM:SS 字串為可讀格式，並包含星期幾"""
+    if not dt_str:
+        return "無時間"
+    try:
+        dt_obj = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
+        # 格式化為<\ctrl97>-MM-DD HH:MM:SS (星期幾)
+        return dt_obj.strftime('%Y-%m-%d %H:%M:%S (%a)') # %a 縮寫星期幾
+    except ValueError:
+        # 如果不是標準格式，嘗試只解析日期
+        try:
+             dt_obj = datetime.strptime(dt_str.split(' ')[0], '%Y-%m-%d').date()
+             # 格式化為<\ctrl97>-MM-DD (星期幾)
+             return dt_obj.strftime('%Y-%m-%d (%a)')
+        except ValueError:
+             return dt_str # 如果格式無效，返回原字串
+
+# ****** 輔助函數：格式化日期並包含星期幾 ******
+def format_date_with_weekday(date_str):
+    """格式化<\ctrl97>-MM-DD 字串為<\ctrl97>-MM-DD (星期幾)"""
+    if not date_str:
+        return "無到期日"
+    try:
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+        return date_obj.strftime('%Y-%m-%d (%a)') # %a 縮寫星期幾
+    except ValueError:
+        return date_str # 如果格式無效，返回原字串
+
+# ****** 輔助函數：檢查日期是否過期 ******
+def is_past_due(date_str):
+    """檢查給定日期字串是否在今天之前"""
+    if not date_str:
+        return False # 無到期日不算過期
+    try:
+        due_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        return due_date < date.today()
+    except ValueError:
+        return False # 日期格式無效不檢查過期
+
 
 class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
     def __init__(self):
-        super().__init__() # 初始化父類 (customtkinter.CTk)
+        super().__init__()
 
         self.title("待辦事項 & 行事曆工具")
-        self.geometry("1000x650") # 設定視窗初始大小，留更多空間
+        self.geometry("1000x650")
 
         self.tasks = load_tasks()
-        self.editing_task_id = None # 用於儲存當前正在編輯的任務 ID，None 表示新增模式
+        self.editing_task_id = None
+        self.save_thread = None
+        self.log_entries = [] # 操作日誌列表
+        self.show_on_hold = True # 控制是否顯示 On Hold 項目
+        self._sort_direction = {} # Initialize sorting direction
+
 
         # --- GUI 元件設定 ---
+        # 直接在 __init__ 中建立和佈局元件
         self.create_widgets()
         self.layout_widgets()
+        self.create_menu()
 
-        # 初次載入時顯示待辦事項
-        self.populate_treeview()
+
+        # Initial population - Schedule this after __init__ completes
+        self.after(0, self.populate_treeview)
+
 
         # 綁定 Treeview 選取事件，用於顯示詳細資訊
         self.task_tree.bind("<<TreeviewSelect>>", self.display_selected_task_details)
         # 綁定 Treeview 雙擊事件，用於載入編輯
-        self.task_tree.bind("<Double-1>", self.load_task_for_editing)
+        self.task_tree.bind("<Double-1>", lambda e: self.load_task_for_editing(e))
+
+        # 綁定 Treeview 標頭點擊事件
+        self.task_tree.bind("<Button-1>", lambda e: self.on_treeview_heading_click(e))
 
 
-        # 綁定 Ctrl+S 儲存快捷鍵到整個應用程式 (使用 KeyPress 增加兼容性)
-        self.bind_all("<Control-KeyPress-s>", self.save_tasks_shortcut)
-        # 對於 macOS, 可以考慮同時綁定 Command+S
-        # self.bind_all("<Command-KeyPress-s>", self.save_tasks_shortcut)
+        # 綁定 Ctrl+S 儲存快捷鍵 (platform specific)
+        if platform.system() == "Darwin": # macOS
+            self.bind_all("<Command-KeyPress-s>", self.save_tasks_shortcut)
+        else: # Windows 或 Linux
+             self.bind_all("<Control-KeyPress-s>", self.save_tasks_shortcut)
 
-        # 綁定 Enter 鍵到特定的處理函數，以區分換行和儲存
+
+        # 綁定 Enter 鍵到特定的處理函數
         self.bind_all("<Return>", self.handle_return_key)
+
+        # 載入過期 icon
+        self.load_icons()
+
+        # 初始化日誌
+        self.log_operation("應用程式啟動")
+
+
+    # ****** 載入圖標方法 ******
+    def load_icons(self):
+        """載入應用程式所需的圖標"""
+        try:
+            # 在同一個目錄下尋找 icon 檔案，或者指定完整路徑
+            icon_path = os.path.join(SCRIPT_DIR, "warning.png") # 使用絕對路徑
+            # print(f"Looking for icon at: {icon_path}") # 除錯用
+            if os.path.exists(icon_path):
+                original_image = Image.open(icon_path)
+                resized_image = original_image.resize((16, 16), Image.Resampling.LANCZOS)
+                self.warning_icon = ImageTk.PhotoImage(resized_image)
+                self._icon_refs = [self.warning_icon] # Store references
+                # print("Warning icon loaded successfully.") # 除錯用
+            else:
+                self.warning_icon = None
+                self.log_operation("警告圖標檔案 'warning.png' 未找到。")
+        except Exception as e:
+            self.warning_icon = None
+            self.log_operation(f"載入警告圖標時發生錯誤: {e}")
+
+
+    # ****** 操作日誌方法 ******
+    def log_operation(self, message):
+        """記錄操作到日誌列表"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        log_entry = f"{timestamp} - {message}"
+        self.log_entries.append(log_entry)
+        print(log_entry) # 同時在控制台打印方便調試
+
+    # ****** 創建頂部選單方法 ******
+    def create_menu(self):
+        """創建應用程式頂部選單"""
+        # 移除舊的 menubar 以避免重複添加
+        if hasattr(self, 'menubar') and self.menubar:
+            self.menubar.destroy()
+
+        self.menubar = tk.Menu(self)
+        self.config(menu=self.menubar) # 將選單欄配置到主視窗
+
+        # 檔案選單
+        filemenu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="檔案", menu=filemenu)
+        filemenu.add_command(label="儲存 (Ctrl+S)", command=lambda: self.save_tasks_shortcut()) # 使用 lambda
+        filemenu.add_command(label="匯出為 Excel", command=lambda: self.export_to_excel()) # 使用 lambda
+        filemenu.add_separator()
+        filemenu.add_command(label="結束", command=self.quit)
+
+        # 查看選單
+        viewmenu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="查看", menu=viewmenu)
+        # ****** 添加顯示操作日誌的選項 ******
+        viewmenu.add_command(label="操作日誌", command=lambda: self.show_log_window()) # 使用 lambda
+
+        # 設置選單
+        optionsmenu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="設置", menu=optionsmenu)
+        # ****** 添加顯示/隱藏 On Hold 項目的選項 ******
+        # 使用 lambda 綁定 command，並在 lambda 內部讀取 variable 的值
+        self.show_on_hold_var = tk.BooleanVar(value=self.show_on_hold)
+        optionsmenu.add_checkbutton(label="顯示 On Hold 項目", variable=self.show_on_hold_var, command=lambda: self.toggle_show_on_hold())
+
+
+    # ****** 顯示操作日誌視窗方法 ******
+    def show_log_window(self):
+        """顯示操作日誌視窗"""
+        log_window = customtkinter.CTkToplevel(self)
+        log_window.title("操作日誌")
+        log_window.geometry("600x400")
+
+        log_textbox = customtkinter.CTkTextbox(log_window, wrap="word")
+        log_textbox.pack(padx=10, pady=10, fill="both", expand=True)
+
+        # 將日誌內容插入 Textbox
+        for entry in self.log_entries:
+            log_textbox.insert(tk.END, entry + "\n")
+
+        log_textbox.configure(state="disabled") # 設置為唯讀
+
+        # 設置焦點
+        log_window.transient(self)
+        log_window.grab_set()
+        log_window.after(10, log_window.lift)
+
+
+    # ****** 切換顯示/隱藏 On Hold 方法 ******
+    def toggle_show_on_hold(self):
+        """切換顯示或隱藏 On Hold 狀態的待辦事項"""
+        self.show_on_hold = self.show_on_hold_var.get() # 從 variable 讀取狀態
+        self.populate_treeview() # 重新填充 Treeview 以應用過濾
+
+        # 更新狀態列中的 On Hold 計數 (如果需要顯示計數的話)
+        # on_hold_count = sum(1 for task in self.tasks if task.get('status') == 'on hold')
+        # self.update_status(f"On Hold 項目 {'顯示' if self.show_on_hold else '隱藏'} ({on_hold_count} 個)。")
+        self.log_operation(f"切換顯示 On Hold 項目為: {'顯示' if self.show_on_hold else '隱藏'}。")
 
 
     def handle_return_key(self, event):
@@ -169,7 +332,8 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         self.date_label = customtkinter.CTkLabel(self.input_frame, text="到期日:")
         # 日期顯示 Label，用於顯示 Calendar 選取的日期
         self.date_display_label = customtkinter.CTkLabel(self.input_frame, text=datetime.now().strftime('%Y-%m-%d'), width=100, anchor=tk.W)
-        self.select_date_button = customtkinter.CTkButton(self.input_frame, text="選取日期", command=self.open_calendar_dialog, width=100)
+        # ****** 修改選取日期按鈕的 command，並應用 lambda ******
+        self.select_date_button = customtkinter.CTkButton(self.input_frame, text="選取日期", command=lambda: self.open_calendar_dialog(), width=100)
 
 
         # Note 輸入區域
@@ -180,9 +344,10 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
 
         # 按鈕區域 (放在 input_frame 內部)
         self.action_button_frame = customtkinter.CTkFrame(self.input_frame, fg_color="transparent") # 使用透明框架
-        self.save_button = customtkinter.CTkButton(self.action_button_frame, text="新增待辦事項", command=self.save_task_gui) # 這個按鈕用於新增或儲存
-        # 取消編輯按鈕，初始不佈局 (pack_forget 稍後在 layout_widgets 中處理)
-        self.cancel_edit_button = customtkinter.CTkButton(self.action_button_frame, text="取消編輯", command=self.cancel_edit, fg_color="gray", hover_color="darkgray")
+        # ****** 使用 lambda 綁定 save_button command ******
+        self.save_button = customtkinter.CTkButton(self.action_button_frame, text="新增待辦事項", command=lambda: self.save_task_gui())
+        # ****** 使用 lambda 綁定 cancel_edit_button command (已修改過) ******
+        self.cancel_edit_button = customtkinter.CTkButton(self.action_button_frame, text="取消編輯", command=lambda: self.cancel_edit(), fg_color="gray", hover_color="darkgray")
 
 
         # Treeview 顯示區域 Frame (使用 CTkFrame 包裹 ttk.Treeview)
@@ -193,25 +358,30 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         self.tree_scrollbar_y = ttk.Scrollbar(self.tree_frame)
         self.tree_scrollbar_x = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL)
 
-        self.task_tree = ttk.Treeview(self.tree_frame, columns=("description", "due_date", "status", "note"), show="headings",
+        # ****** 增加 creation_time 列 ******
+        self.task_tree = ttk.Treeview(self.tree_frame, columns=("creation_time", "description", "due_date", "status", "note"), show="headings",
                                        yscrollcommand=self.tree_scrollbar_y.set, xscrollcommand=self.tree_scrollbar_x.set)
         self.tree_scrollbar_y.config(command=self.task_tree.yview)
         self.tree_scrollbar_x.config(command=self.task_tree.xview)
 
         # 可以設定 Treeview 的樣式，例如行高或顏色
-        # style = ttk.Style()
-        # style.theme_use("clam") # 嘗試不同的 ttk 主題
-        # style.configure("Treeview", rowheight=25) # 設定行高
+        style = ttk.Style()
+        # ****** 設置過期項目的顏色 Tag Style ******
+        style.configure("expired.Treeview", foreground="red")
+        style.configure("on hold.Treeview", foreground="gray") # On Hold 項目顏色 (如果顯示的話)
+        # 您也可以為其他狀態定義樣式，例如 completed.Treeview { foreground: green }
 
 
-        self.task_tree.heading("description", text="內容", anchor=tk.W)
+        # ****** 設置欄位標題和寬度 ******
+        self.task_tree.heading("creation_time", text="建立時間", anchor=tk.W)
+        self.task_tree.heading("description", text="內容", anchor=tk.W) # ****** 確保內容靠左對齊 ******
         self.task_tree.heading("due_date", text="到期日", anchor=tk.CENTER)
         self.task_tree.heading("status", text="狀態", anchor=tk.CENTER)
         self.task_tree.heading("note", text="備註/網址", anchor=tk.W)
 
-
-        self.task_tree.column("description", width=250, anchor=tk.W, stretch=True)
-        self.task_tree.column("due_date", width=90, anchor=tk.CENTER, stretch=False)
+        self.task_tree.column("creation_time", width=150, anchor=tk.W, stretch=False)
+        self.task_tree.column("description", width=250, anchor=tk.W, stretch=True) # ****** 確保內容靠左對齊 ******
+        self.task_tree.column("due_date", width=120, anchor=tk.CENTER, stretch=False) # 加寬以容納星期幾
         self.task_tree.column("status", width=80, anchor=tk.CENTER, stretch=False)
         self.task_tree.column("note", width=250, anchor=tk.W, stretch=True)
 
@@ -228,11 +398,13 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         self.status_combobox = customtkinter.CTkComboBox(self.button_frame, values=STATUS_OPTIONS, width=120) # 稍微加寬下拉選單
         self.status_combobox.set("completed") # 預設選中 "completed"
 
-        self.set_status_button = customtkinter.CTkButton(self.button_frame, text="變更選取狀態", command=self.set_selected_task_status)
-        self.delete_button = customtkinter.CTkButton(self.button_frame, text="刪除選取", command=self.delete_selected_task, fg_color="red", hover_color="darkred")
+        # ****** 使用 lambda 綁定 set_status_button command ******
+        self.set_status_button = customtkinter.CTkButton(self.button_frame, text="變更選取狀態", command=lambda: self.set_selected_task_status())
+        # ****** 使用 lambda 綁定 delete_button command ******
+        self.delete_button = customtkinter.CTkButton(self.button_frame, text="刪除選取", command=lambda: self.delete_selected_task(), fg_color="red", hover_color="darkred")
 
-        # ****** 新增匯出按鈕 ******
-        self.export_button = customtkinter.CTkButton(self.button_frame, text="匯出為 Excel", command=self.export_to_excel)
+        # ****** 使用 lambda 綁定 export_button command ******
+        self.export_button = customtkinter.CTkButton(self.button_frame, text="匯出為 Excel", command=lambda: self.export_to_excel())
 
 
         # 詳細資訊顯示區域 Frame (使用 CTkFrame)
@@ -245,6 +417,10 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         ttk.Separator(self.details_frame, orient='horizontal').grid(row=1, column=0, columnspan=2, sticky="ew")
 
         # 詳細資訊 Labels
+        # ****** 增加建立時間詳細資訊顯示 ******
+        self.details_creation_time_label = customtkinter.CTkLabel(self.details_frame, text="建立時間:", anchor=tk.W)
+        self.details_creation_time_value = customtkinter.CTkLabel(self.details_frame, text="", anchor=tk.W)
+
         self.details_desc_label = customtkinter.CTkLabel(self.details_frame, text="內容:", anchor=tk.W)
         self.details_desc_value = customtkinter.CTkLabel(self.details_frame, text="", anchor=tk.W, wraplength=450) # 內容值，加寬換行長度
 
@@ -265,6 +441,10 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         # 為標準 Text widget 添加滾動條
         self.details_note_scrollbar_y = ttk.Scrollbar(self.details_frame, command=self.details_note_textbox.yview)
         self.details_note_textbox.configure(yscrollcommand=self.details_note_scrollbar_y.set)
+
+        # ****** 增加 Image Path 詳細資訊顯示 (暫時隱藏，用於未來擴展) ******
+        # self.details_image_label = customtkinter.CTkLabel(self.details_frame, text="圖片路徑:", anchor=tk.W)
+        # self.details_image_value = customtkinter.CTkLabel(self.details_frame, text="", anchor=tk.W, wraplength=450)
 
 
         # 狀態訊息 Label (使用 CTkLabel)
@@ -308,16 +488,36 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
 
         # 佈局詳細資訊區域
         self.details_frame.pack(pady=5, padx=10, fill="x", expand=False)
-        self.details_desc_label.grid(row=2, column=0, padx=5, pady=2, sticky="nw")
-        self.details_desc_value.grid(row=2, column=1, padx=5, pady=2, sticky="ew")
-        self.details_date_label.grid(row=3, column=0, padx=5, pady=2, sticky="nw")
-        self.details_date_value.grid(row=3, column=1, padx=5, pady=2, sticky="ew")
-        self.details_status_label.grid(row=4, column=0, padx=5, pady=2, sticky="nw")
-        self.details_status_value.grid(row=4, column=1, padx=5, pady=2, sticky="ew")
-        self.details_note_label.grid(row=5, column=0, padx=5, pady=2, sticky="nw") # 備註標籤靠左上
+        r=2 # 起始行
+        # ****** 佈局建立時間詳細資訊顯示 ******
+        self.details_creation_time_label.grid(row=r, column=0, padx=5, pady=2, sticky="nw")
+        self.details_creation_time_value.grid(row=r, column=1, padx=5, pady=2, sticky="ew")
+        r+=1
+
+        self.details_desc_label.grid(row=r, column=0, padx=5, pady=2, sticky="nw")
+        self.details_desc_value.grid(row=r, column=1, padx=5, pady=2, sticky="ew")
+        r+=1
+
+        self.details_date_label.grid(row=r, column=0, padx=5, pady=2, sticky="nw")
+        self.details_date_value.grid(row=r, column=1, padx=5, pady=2, sticky="ew")
+        r+=1
+
+        self.details_status_label.grid(row=r, column=0, padx=5, pady=2, sticky="nw")
+        self.details_status_value.grid(row=r, column=1, padx=5, pady=2, sticky="ew")
+        r+=1
+
+        self.details_note_label.grid(row=r, column=0, padx=5, pady=2, sticky="nw") # 備註標籤靠左上
         # ****** 佈局標準 Text widget 和其滾動條 ******
-        self.details_note_textbox.grid(row=5, column=1, padx=(5, 0), pady=2, sticky="nsew")
-        self.details_note_scrollbar_y.grid(row=5, column=2, padx=(0, 5), pady=2, sticky="ns")
+        self.details_note_textbox.grid(row=r, column=1, padx=(5, 0), pady=2, sticky="nsew")
+        self.details_note_scrollbar_y.grid(row=r, column=2, padx=(0, 5), pady=2, sticky="ns")
+        r+=1
+
+        # ****** 佈局 Image Path 詳細資訊顯示 (暫時隱藏) ******
+        # self.details_image_label.grid(row=r, column=0, padx=5, pady=2, sticky="nw")
+        # self.details_image_value.grid(row=r, column=1, padx=5, pady=2, sticky="ew")
+        # r+=1
+
+
         self.details_frame.grid_columnconfigure(1, weight=1) # 確保 Text widget 所在的列能擴展
         self.details_frame.grid_columnconfigure(2, weight=0) # 滾動條列不擴展
 
@@ -329,8 +529,9 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         self.grid_rowconfigure(1, weight=1) # tree_frame 所在的 row
 
 
+    # ****** 修改 open_calendar_dialog 實現相鄰位置 ******
     def open_calendar_dialog(self):
-        """打開日曆選擇對話框"""
+        """打開日曆選擇對話框，並嘗試定位在主視窗旁邊"""
         def grab_date():
             """從日曆獲取選取的日期並更新顯示"""
             try:
@@ -355,8 +556,7 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         except (ValueError, tk.TclError):
              initial_date = date.today() # 如果顯示的日期無效，使用今天
 
-        # ****** 創建 Calendar widget，並設定較大的字體 ******
-        # 創建一個較大的字體對象
+        # 創建 Calendar widget，並設定較大的字體
         calendar_font = tkfont.Font(family="Arial", size=12) # 可以根據需要調整字體和大小
 
         cal = Calendar(top, selectmode='day', date_pattern='yyyy-mm-dd', year=initial_date.year, month=initial_date.month, day=initial_date.day,
@@ -367,6 +567,39 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
 
         ok_button = customtkinter.CTkButton(top, text="確定", command=grab_date)
         ok_button.pack(pady=10)
+
+        # ****** 計算並設定對話框位置 ******
+        self.update_idletasks() # 更新視窗狀態以獲取正確的幾何信息
+        main_x = self.winfo_x()
+        main_y = self.winfo_y()
+        main_width = self.winfo_width()
+        # main_height = self.winfo_height() # 不一定需要主視窗高度
+
+        # 獲取對話框的請求尺寸 (需要先 pack/place/grid 才能獲取)
+        # 這裡日曆已經 pack 了，應該可以獲取
+        top.update_idletasks() # 更新對話框狀態
+        dialog_width = top.winfo_width()
+        # dialog_height = top.winfo_height() # 不一定需要對話框高度
+
+        # 計算位置：主視窗右側
+        # 考慮到主視窗的邊框和陰影，以及對話框的邊框，可以稍微調整
+        x_pos = main_x + main_width + 10 # 10 像素間距
+        y_pos = main_y # 與主視窗頂部對齊
+
+        # 如果右側空間不足，可以考慮放在主視窗下方或其他位置
+        # 簡單判斷：如果右側放置後超出螢幕範圍，可以嘗試放在左側或居中
+        screen_width = self.winfo_screenwidth()
+        if x_pos + dialog_width > screen_width:
+            # 放在左側
+            x_pos = main_x - dialog_width - 10
+            # 如果左側也放不下，就居中顯示
+            if x_pos < 0:
+                 x_pos = main_x + (main_width - dialog_width) // 2
+                 y_pos = main_y + 50 # 稍微偏下避免遮擋標題列
+
+
+        top.geometry(f"+{x_pos}+{y_pos}")
+
 
         # 設置焦點到對話框
         top.after(10, top.lift) # 確保對話框在最前面
@@ -381,16 +614,16 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
 
 
         # 檢查是否是從備註框觸發的 Ctrl+Enter，且備註框是空的，如果是，則不新增
-        # 這個檢查是在 handle_return_key 中做的，這裡再次確認以防萬一
         focused_widget = self.focus_get()
-        # 如果是備註框有焦點，且描述和備註都是空的，並且當前不是編輯模式 (編輯模式允許清空後儲存)
-        if focused_widget == self.note_textbox and not description and not note and self.editing_task_id is None:
+        if focused_widget in [self.note_textbox, self.details_note_textbox] and not description and not note and self.editing_task_id is None:
              self.update_status("備註內容和描述都為空，不新增。")
+             self.log_operation("嘗試新增待辦事項失敗：備註和內容為空。")
              return
 
 
         if not description:
             messagebox.showwarning("輸入錯誤", "待辦事項內容不能為空。")
+            self.log_operation("嘗試新增待辦事項失敗：內容為空。")
             return
 
         due_date = None
@@ -400,8 +633,8 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
                 datetime.strptime(due_date_str, '%Y-%m-%d')
                 due_date = due_date_str
             except ValueError:
-                 # 這作為一個保險，通常不會觸發
                 messagebox.showwarning("內部錯誤", "日期格式無效。")
+                self.log_operation("嘗試新增/修改待辦事項失敗：日期格式無效。")
                 return
 
         # 根據 editing_task_id 判斷是新增還是修改
@@ -412,32 +645,261 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
                 'description': description,
                 'due_date': due_date,
                 'status': 'pending', # 新增任務預設狀態為 pending
-                'note': note
+                'note': note,
+                'creation_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), # 記錄建立時間
+                'image_path': None # 初始化 image_path 欄位
             }
             self.tasks.append(task)
             message = "待辦事項已新增。"
+            log_msg = f"新增待辦事項 (ID: {task['id']}): '{description}'"
         else:
             # ====== 修改模式 ======
-            # 找到列表中對應的任務
             task_to_edit = next((task for task in self.tasks if task['id'] == self.editing_task_id), None)
             if task_to_edit:
                 task_to_edit['description'] = description
                 task_to_edit['due_date'] = due_date
                 task_to_edit['note'] = note
+                # creation_time 不修改
                 # 狀態不通過這裡修改，通過下面的按鈕修改
+                # image_path 不通過這裡修改
                 message = f"待辦事項 (ID: {self.editing_task_id}) 已修改。"
+                log_msg = f"修改待辦事項 (ID: {self.editing_task_id}): '{description}'"
             else:
                 messagebox.showerror("錯誤", f"找不到 ID 為 {self.editing_task_id} 的待辦事項進行修改。")
+                self.log_operation(f"嘗試修改待辦事項失敗：找不到 ID {self.editing_task_id}。")
                 self.cancel_edit() # 取消編輯狀態
                 return
 
+        self.log_operation(log_msg)
 
-        save_tasks(self.tasks)
-        self.populate_treeview() # 更新顯示
-        self.clear_input_fields() # 清空輸入框
-        self.cancel_edit() # 儲存成功後，切換回新增模式並隱藏取消按鈕
+        # ====== 將儲存操作移到執行緒中 ======
+        self._start_save_thread(
+            tasks_to_save=list(self.tasks), # 傳遞 tasks 的副本
+            message=f"{'新增' if self.editing_task_id is None else '修改'}並儲存中...",
+            completion_callback=lambda success, err: self.after(0, self._on_save_complete_gui, success, err, message)
+        )
 
+
+    # ****** 執行緒相關方法 ******
+    def _worker_save(self, tasks_to_save, completion_callback):
+        """Worker function to run save_tasks in a separate thread."""
+        try:
+            save_result = save_tasks(tasks_to_save) # Call save_tasks and get the raw result
+
+            # ****** 根據 save_tasks 的返回值類型，正確設定 success 和 error ******
+            if isinstance(save_result, tuple) and len(save_result) == 2 and save_result[0] is False:
+                # This is the expected failure case (False, error)
+                success = False
+                error = save_result[1]
+            elif save_result is True:
+                 # This is the expected success case (True)
+                 success = True
+                 error = None
+            else:
+                 # Handle unexpected return value from save_tasks
+                 success = False
+                 error = f"Unexpected save result: {save_result}"
+                 print(f"DEBUG: Worker Save Error: {error}") # Log this internal worker error
+
+
+            # Notify main thread using self.after
+            # Pass success (bool) and error (Exception object or None)
+            self.after(0, completion_callback, success, error)
+
+        except Exception as e:
+            # Catch any unexpected exceptions within the worker itself
+            print(f"Error in save worker thread (unexpected exception): {e}")
+            self.after(0, completion_callback, False, e)
+
+
+    def _start_save_thread(self, tasks_to_save, message="儲存中...", completion_callback=None):
+        """Starts the save operation in a new thread."""
+        if self.save_thread is not None and self.save_thread.is_alive():
+            self.update_status("儲存操作進行中，請稍候...")
+            self.log_operation("嘗試儲存時發現已有儲存進行中。")
+            return
+
+        self.save_thread = threading.Thread(target=self._worker_save, args=(tasks_to_save, completion_callback))
+        self.save_thread.daemon = True
         self.update_status(message)
+        self.log_operation(f"開始背景儲存操作: {message}")
+        self.save_thread.start()
+
+
+    def _on_save_complete_gui(self, success, error, user_message):
+        """在主執行緒中執行，處理儲存完成後的 GUI 更新"""
+        self.save_thread = None
+
+        if success:
+            # 儲存成功後執行後續的 GUI 操作
+
+            # 再次延遲 populate_treeview 的執行，安排到主執行緒的下一個空閒時刻
+            self.after(0, self.populate_treeview)
+
+            # 延遲其他 GUI 操作
+            self.after(0, lambda: self.clear_input_fields())
+            self.after(0, lambda: self.cancel_edit())
+
+            # 顯示操作成功的訊息
+            self.after(0, lambda: self.update_status(user_message))
+            self.log_operation("背景儲存操作完成。")
+        else:
+            # 儲存失敗的處理
+            self.update_status(f"儲存失敗: {error}")
+            messagebox.showerror("儲存錯誤", f"儲存檔案時發生錯誤:\n{error}")
+            self.log_operation(f"背景儲存操作失敗: {error}")
+
+
+    def save_tasks_shortcut(self, event=None): # 接受 event 參數
+        """Ctrl+S 快捷鍵儲存任務"""
+        if self.editing_task_id is not None:
+            self.save_task_gui()
+        else:
+            self._start_save_thread(
+                tasks_to_save=list(self.tasks),
+                message="儲存中 (Ctrl+S)...",
+                completion_callback=lambda success, err: self.after(0, self._on_save_complete_gui, success, err, "待辦事項已儲存 (Ctrl+S)。")
+            )
+            self.log_operation("通過快捷鍵觸發儲存。")
+        return "break" # 阻止事件繼續傳播
+
+
+    # ****** 點擊 Treeview 標頭處理排序 ******
+    # ****** 實現 Treeview 排序邏輯 (包含在 populate_treeview 中應用) ******
+    _sort_direction = {} # 用於儲存每列的排序方向
+    _sort_column = None # 用於儲存當前排序列 ID
+
+    def on_treeview_heading_click(self, event):
+        """處理 Treeview 標頭點擊事件，實現排序"""
+        region = self.task_tree.identify_region(event.x, event.y)
+        if region == "heading":
+            col = self.task_tree.identify_column(event.x)
+            # 將列 ID 轉換為列名 (如 #1 -> creation_time, #2 -> description 等)
+            # Treeview columns 是 ("creation_time", "description", "due_date", "status", "note")
+            column_map = {
+                "#1": "creation_time",
+                "#2": "description",
+                "#3": "due_date",
+                "#4": "status",
+                "#5": "note"
+            }
+            col_id = column_map.get(col)
+
+            if col_id:
+                # ****** 執行排序 ******
+                # 更新當前排序列和方向
+                if self._sort_column == col_id:
+                    # 如果是同一列，切換排序方向
+                    self._sort_direction[col_id] = 'descending' if self._sort_direction.get(col_id, 'ascending') == 'ascending' else 'ascending'
+                else:
+                    # 如果是新列，設定為遞增排序
+                    self._sort_column = col_id
+                    self._sort_direction = {col_id: 'ascending'} # 清除其他列的排序狀態
+
+
+                self.populate_treeview() # 重新填充並應用新的排序
+
+                # 更新標頭箭頭指示
+                # 清除所有標頭的舊箭頭
+                for c in column_map.values():
+                    # 安全地處理可能沒有箭頭的情況
+                    current_text_parts = self.task_tree.heading(c, 'text').split(' ')
+                    current_text = current_text_parts[0] if current_text_parts else ""
+                    self.task_tree.heading(c, text=current_text)
+
+                # 添加新箭頭到當前排序列的標頭
+                arrow = ' ▲' if self._sort_direction[col_id] == 'ascending' else ' ▼'
+                current_text = self.task_tree.heading(col_id, 'text').split(' ')[0] # 再次安全獲取原始標題文字
+                self.task_tree.heading(col_id, text=f"{current_text}{arrow}")
+
+
+                self.log_operation(f"按 '{col_id}' 欄位進行了 {'遞減' if self._sort_direction[col_id] == 'descending' else '遞增'} 排序。")
+
+
+    def populate_treeview(self):
+        """清空 Treeview 並重新填入待辦事項，應用過濾和排序"""
+        # 清空現有內容
+        for item in self.task_tree.get_children():
+            self.task_tree.delete(item)
+
+        # 根據是否顯示 On Hold 項目進行過濾
+        tasks_to_display = [task for task in self.tasks if self.show_on_hold or task.get('status') != 'on hold']
+
+        # ****** 應用當前排序 ******
+        if self._sort_column:
+             sort_col_id = self._sort_column
+             sort_direction = self._sort_direction.get(sort_col_id, 'ascending') # 默認遞增
+
+             def sort_key(task):
+                 value = task.get(sort_col_id)
+                 # 處理日期和時間的排序
+                 if sort_col_id in ['due_date', 'creation_time']:
+                      try:
+                         if sort_col_id == 'due_date':
+                              return datetime.strptime(str(value).split(' ')[0], '%Y-%m-%d').date() if value else datetime.max.date() # 將 None/空字串排在最後
+                         if sort_col_id == 'creation_time':
+                              return datetime.strptime(str(value), '%Y-%m-%d %H:%M:%S') if value else datetime.max # 將 None/空字串排在最後
+                      except (ValueError, IndexError):
+                         if sort_col_id == 'creation_time': return datetime.max
+                         else: return datetime.max.date()
+
+                 # 處理狀態的排序
+                 elif sort_col_id == 'status':
+                      try:
+                         return STATUS_OPTIONS.index(value)
+                      except ValueError:
+                         return len(STATUS_OPTIONS) # 未知狀態排在最後
+
+                 # 處理其他列
+                 return str(value).lower() if value is not None else '' # 處理 None 值，並按字串排序
+
+             # 執行排序
+             tasks_to_display.sort(key=sort_key, reverse=(sort_direction == 'descending'))
+        else:
+             # 默認排序 (如果沒有點擊標頭) - 按建立時間降序
+             # 確保處理 None 值
+             tasks_to_display.sort(key=lambda x: datetime.strptime(x.get('creation_time', '1900-01-01 00:00:00'), '%Y-%m-%d %H:%M:%S') if x.get('creation_time') else datetime.min, reverse=True)
+
+
+        # 填充 Treeview
+        on_hold_count = sum(1 for task in self.tasks if task.get('status') == 'on hold') # 計算 On Hold 總數
+        # displayed_on_hold_count = sum(1 for task in tasks_to_display if task.get('status') == 'on hold') # 計算顯示的 On Hold 數
+
+        for task in tasks_to_display:
+            status_display = task.get('status', '未知狀態') if task.get('status') in STATUS_OPTIONS else "未知狀態"
+            due_date_display = format_date_with_weekday(task.get('due_date'))
+            note_preview = (str(task.get('note', '')[:60].replace('\n', ' ') + '...') if len(str(task.get('note', ''))) > 60 else str(task.get('note', '')).replace('\n', ' ')) # 確保 note 是字串
+            creation_time_display = format_datetime(task.get('creation_time'))
+
+            tags = [task.get('status', 'pending')]
+            is_expired = task.get('due_date') and is_past_due(task['due_date'])
+            if is_expired:
+                tags.append("expired")
+
+            # 檢查 icon 是否成功載入且任務已過期
+            icon = self.warning_icon if is_expired and self.warning_icon else ''
+
+            self.task_tree.insert("", "end", iid=str(task.get('id')),
+                                   # ****** 修改：將建立時間也設定為 #0 列的文字 (text 參數) ******
+                                   text=creation_time_display,
+                                   values=(creation_time_display, task.get('description', ''), due_date_display, status_display, note_preview), # 這裡保留建立時間，方便排序
+                                   tags=tags, # 套用 tag
+                                   image=icon # 套用過期圖標
+                                   )
+
+        # ****** 在狀態列顯示 On Hold 項目數量 ******
+        if not self.show_on_hold and on_hold_count > 0:
+             self.status_label.configure(text=f"已隱藏 {on_hold_count} 個 On Hold 項目。")
+        else:
+             # 如果沒有隱藏 On Hold 或沒有 On Hold 項目，顯示最後的操作訊息
+             # 檢查狀態列是否正在顯示儲存訊息
+             current_status_text = self.status_label.cget("text")
+             if "儲存中" not in current_status_text and "已儲存" not in current_status_text:
+                  self.update_status(f"總計 {len(self.tasks)} 個待辦事項。")
+
+
+        # ****** 記錄操作日誌 ******
+        self.log_operation(f"Treeview 已重新填充並應用過濾/排序 ({len(tasks_to_display)}/{len(self.tasks)} 總數顯示)。")
 
 
     def load_task_for_editing(self, event=None): # 接受 event 參數
@@ -447,12 +909,18 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
             return # 沒有選取任何項目
 
         # 只載入第一個選取的項目進行編輯
-        selected_id = int(selected_items_iid[0])
+        first_selected_id_str = selected_items_iid[0]
+        try:
+             selected_id = int(first_selected_id_str)
+        except ValueError:
+             self.log_operation(f"嘗試載入編輯失敗：無效的 Treeview iid {first_selected_id_str}。")
+             return
+
+
         task_to_edit = next((task for task in self.tasks if task['id'] == selected_id), None)
 
         if task_to_edit:
             # 如果當前已經在編輯另一個任務，先取消之前的編輯狀態
-            # (只有 ID 不同時才取消)
             if self.editing_task_id is not None and self.editing_task_id != selected_id:
                  self.cancel_edit() # 取消之前的編輯狀態
             # 如果點擊的是當前正在編輯的任務，不做任何事
@@ -464,10 +932,9 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
             self.clear_input_fields()
 
             # 填充輸入框
-            self.desc_entry.insert(0, task_to_edit['description'])
-            self.date_display_label.configure(text=task_to_edit['due_date'] if task_to_edit['due_date'] else "")
-            # ****** Textbox 插入內容 ******
-            self.note_textbox.insert("1.0", task_to_edit['note'])
+            self.desc_entry.insert(0, task_to_edit.get('description', ''))
+            self.date_display_label.configure(text=task_to_edit.get('due_date') if task_to_edit.get('due_date') else "")
+            self.note_textbox.insert("1.0", task_to_edit.get('note', ''))
 
 
             # 設定編輯模式狀態
@@ -475,224 +942,201 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
             self.save_button.configure(text="儲存修改") # 更改按鈕文字
 
             # 顯示取消編輯按鈕
-            # 檢查是否已經 pack 了，避免重複 pack
-            if not any(slave for slave in self.action_button_frame.pack_slaves() if slave == self.cancel_edit_button):
-                self.cancel_edit_button.pack(side=tk.LEFT, padx=5, pady=5, in_=self.action_button_frame) # pack 到 action_button_frame 裏面
+            # 檢查按鈕是否已經在佈局中
+            if self.cancel_edit_button.winfo_manager() != 'pack':
+                 self.cancel_edit_button.pack(side=tk.LEFT, padx=5, pady=5, in_=self.action_button_frame)
 
 
             self.update_status(f"載入待辦事項 (ID: {selected_id}) 進行編輯。")
+            self.log_operation(f"載入任務 (ID: {selected_id}) 進行編輯。")
         else:
             self.cancel_edit() # 如果沒找到任務，確保切回新增模式
+            self.log_operation(f"嘗試載入編輯失敗：找不到 ID {selected_id} 的任務。")
 
 
     def cancel_edit(self):
         """取消編輯狀態，清空輸入框，切回新增模式"""
-        self.editing_task_id = None
-        self.clear_input_fields()
-        self.save_button.configure(text="新增待辦事項") # 更改按鈕文字回新增
-        # 隱藏取消編輯按鈕
-        self.cancel_edit_button.pack_forget() # 從佈局中移除按鈕
+        if self.editing_task_id is not None: # 只有在編輯模式下才執行取消
+             self.editing_task_id = None
+             self.clear_input_fields()
+             self.save_button.configure(text="新增待辦事項") # 更改按鈕文字回新增
+             # 檢查按鈕是否在佈局中才 pack_forget
+             if self.cancel_edit_button.winfo_manager() == 'pack':
+                 self.cancel_edit_button.pack_forget()
 
-        # 清除 Treeview 選取狀態
-        self.task_tree.selection_remove(self.task_tree.selection())
+             # 清除 Treeview 選取狀態
+             # 安全檢查，確保 task_tree 存在且不是 None
+             if hasattr(self, 'task_tree') and self.task_tree is not None:
+                 selected_items = self.task_tree.selection()
+                 if selected_items:
+                      self.task_tree.selection_remove(selected_items)
 
-        self.update_status("編輯已取消，切回新增模式。")
-
-
-    def populate_treeview(self):
-        """清空 Treeview 並重新填入待辦事項"""
-        # 清空現有內容
-        for item in self.task_tree.get_children():
-            self.task_tree.delete(item)
-
-        # 按照到期日排序 (無到期日的排在後面), 再按狀態順序, 最後按 ID
-        # 使用 STATUS_OPTIONS.index 來確保狀態按照列表的順序排序
-        sorted_tasks = sorted(self.tasks, key=lambda x: (x['due_date'] if x['due_date'] else '9999-12-31', STATUS_OPTIONS.index(x['status']) if x['status'] in STATUS_OPTIONS else len(STATUS_OPTIONS), x['id']))
-
-
-        # 填充 Treeview
-        for task in sorted_tasks:
-            status_display = task['status'] if task['status'] in STATUS_OPTIONS else "未知狀態"
-            due_date_display = task['due_date'] if task['due_date'] else "無到期日"
-            # 在 Treeview 中顯示部分備註，防止過長
-            # 替換換行符為空格，並限制長度
-            note_preview = (task['note'][:60].replace('\n', ' ') + '...') if len(task['note']) > 60 else task['note'].replace('\n', ' ')
-
-            self.task_tree.insert("", "end", iid=str(task['id']), # 使用 task['id'] 作為 Treeview item 的 iid (字串)
-                                   values=(task['description'], due_date_display, status_display, note_preview),
-                                   tags=(task['status'],)) # 使用狀態作為 tag
+             self.update_status("編輯已取消，切回新增模式。")
+             self.log_operation("編輯操作已取消。")
 
 
     def set_selected_task_status(self):
         """標記選取的待辦事項狀態為下拉選單的值"""
-        selected_items_iid = self.task_tree.selection() # 獲取選取項目的 iid (即 task['id'])
+        selected_items_iid = self.task_tree.selection()
         if not selected_items_iid:
             messagebox.showwarning("選取錯誤", "請選取要變更狀態的待辦事項。")
+            self.log_operation("嘗試變更狀態失敗：未選取項目。")
             return
 
         new_status = self.status_combobox.get()
         if new_status not in STATUS_OPTIONS:
              messagebox.showwarning("狀態錯誤", "選取的狀態無效。")
+             self.log_operation(f"嘗試變更狀態失敗：無效狀態 '{new_status}'。")
              return
 
         updated_count = 0
-        # 複製選取的 iid 列表，避免在迴圈中修改 Treeview 導致問題
-        selected_ids_to_process = [int(item_iid) for item_iid in selected_items_iid]
+        selected_ids_to_process = []
+        for item_iid in selected_items_iid:
+             try:
+                 task_id = int(item_iid)
+                 task = next((t for t in self.tasks if t['id'] == task_id), None)
+                 if task and task.get('status') != new_status: # 安全獲取狀態
+                    selected_ids_to_process.append(task_id)
+             except ValueError:
+                 continue
+
 
         for task_id in selected_ids_to_process:
-            # 找到 tasks 列表中對應的 task
-            # 使用 next 和生成器表達式可以更有效率地查找
             task = next((t for t in self.tasks if t['id'] == task_id), None)
-
-            if task and task['status'] != new_status:
+            if task:
                 task['status'] = new_status
                 updated_count += 1
-                # 如果正在編輯這個任務，更新編輯區的狀態顯示（雖然狀態下拉選單在下方）
                 if self.editing_task_id == task_id:
-                    # 重新載入編輯區，會自動更新狀態顯示
-                    # 注意：這裡重新載入編輯區會清除當前在編輯區可能未儲存的改動！
-                    # 一個更複雜的實現是只更新編輯區的狀態顯示，而不是重新載入所有數據
-                    # 這裡為了簡單性，選擇重新載入
-                    self.load_task_for_editing()
+                    self.after(10, lambda: self.load_task_for_editing(None)) # 延遲載入編輯區
 
 
         if updated_count > 0:
-             save_tasks(self.tasks)
-             self.populate_treeview() # 更新顯示
-             # 更新詳細資訊區域，以防選取的項目狀態改變
-             # if selected_items_iid: # TreeviewSelect 事件會自動觸發 display_selected_task_details
-                # self.display_selected_task_details()
-
-
-             self.update_status(f"{updated_count} 個待辦事項狀態已變更為 '{new_status}'。")
-             # 重新選取剛剛操作的項目，保持選取狀態（可選）
-             # self.task_tree.selection_set(selected_items_iid)
+             self._start_save_thread(
+                 tasks_to_save=list(self.tasks),
+                 message=f"變更狀態並儲存中 ({updated_count}個任務)...",
+                 completion_callback=lambda success, err: self.after(0, self._on_save_complete_gui, success, err, f"{updated_count} 個待辦事項狀態已變更為 '{new_status}'。")
+             )
+             self.log_operation(f"變更了 {updated_count} 個任務的狀態為 '{new_status}'。")
         else:
              self.update_status(f"選取的待辦事項狀態已是 '{new_status}'，無需變更。")
+             self.log_operation(f"選取的任務狀態已是 '{new_status}'，未執行變更。")
 
 
     def delete_selected_task(self):
         """刪除選取的待辦事項"""
-        selected_items_iid = self.task_tree.selection() # 獲取選取項目的 iid (即 task['id'])
+        selected_items_iid = self.task_tree.selection()
         if not selected_items_iid:
             messagebox.showwarning("選取錯誤", "請選取要刪除的待辦事項。")
+            self.log_operation("嘗試刪除任務失敗：未選取項目。")
             return
 
-        # 確認刪除
         if not messagebox.askyesno("確認刪除", f"確定要刪除這 {len(selected_items_iid)} 個待辦事項嗎？"):
+            self.log_operation("取消刪除任務。")
             return
 
-        # 將選取的 iid 轉換為 task ID 列表
-        selected_task_ids = [int(item_iid) for item_iid in selected_items_iid]
+        selected_task_ids = []
+        for item_iid in selected_items_iid:
+             try:
+                 selected_task_ids.append(int(item_iid))
+             except ValueError:
+                 continue
 
-        # 使用列表推導式創建一個新的列表，只包含 ID 不在 selected_task_ids 中的任務
+
         initial_task_count = len(self.tasks)
         self.tasks = [task for task in self.tasks if task['id'] not in selected_task_ids]
 
-        deleted_count = initial_task_count - len(self.tasks) # 計算實際刪除數量
+        deleted_count = initial_task_count - len(self.tasks)
 
-        save_tasks(self.tasks)
-        self.populate_treeview() # 更新顯示
-        self.clear_details_display() # 清空詳細資訊顯示
+        if deleted_count > 0:
+            if self.editing_task_id is not None and self.editing_task_id in selected_task_ids:
+                 self.cancel_edit()
 
-        # 如果當前正在編輯的任務被刪除了，取消編輯狀態
-        if self.editing_task_id is not None and self.editing_task_id in selected_task_ids:
-             self.cancel_edit()
+            self._start_save_thread(
+                tasks_to_save=list(self.tasks),
+                message=f"刪除任務並儲存中 ({deleted_count}個任務)...",
+                completion_callback=lambda success, err: self.after(0, self._on_save_complete_gui, success, err, f"{deleted_count} 個待辦事項已刪除。")
+            )
+            self.clear_details_display()
+            self.log_operation(f"刪除了 {deleted_count} 個任務。")
+        else:
+             self.update_status("沒有任務被刪除。")
+             self.log_operation("沒有選取到有效的任務進行刪除。")
 
-        self.update_status(f"{deleted_count} 個待辦事項已刪除。")
 
-    def display_selected_task_details(self, event=None): # 接受 event 參數，因為綁定會傳遞
+    def display_selected_task_details(self, event=None):
         """在 Treeview 選取項目時顯示詳細資訊"""
         selected_items_iid = self.task_tree.selection()
         if not selected_items_iid:
-            # 如果沒有選取任何項目，且沒有處於編輯狀態，才清空詳細資訊顯示區域
             if self.editing_task_id is None:
                  self.clear_details_display()
             return
 
-        # 只顯示第一個選取項目的詳細資訊
-        first_selected_id = int(selected_items_iid[0])
+        first_selected_id_str = selected_items_iid[0]
+        try:
+            first_selected_id = int(first_selected_id_str)
+        except ValueError:
+            self.clear_details_display()
+            return
 
-        # 找到 tasks 列表中對應的 task
+
         selected_task = next((task for task in self.tasks if task['id'] == first_selected_id), None)
 
         if selected_task:
             self.display_task_details(selected_task)
         else:
-            self.clear_details_display() # 如果沒找到，清空顯示
+            self.clear_details_display()
 
 
     def display_task_details(self, task):
         """將指定 task 的詳細資訊顯示在詳細資訊區域"""
-        self.details_desc_value.configure(text=task['description'])
-        self.details_date_value.configure(text=task['due_date'] if task['due_date'] else "無到期日")
-        self.details_status_value.configure(text=task['status'] if task['status'] in STATUS_OPTIONS else "未知狀態")
+        self.details_creation_time_value.configure(text=format_datetime(task.get('creation_time')))
+        self.details_desc_value.configure(text=task.get('description', ''))
+        self.details_date_value.configure(text=format_date_with_weekday(task.get('due_date')))
+        self.details_status_value.configure(text=task.get('status', '未知狀態') if task.get('status') in STATUS_OPTIONS else "未知狀態")
 
-        # 清空 Textbox 並插入新內容
-        # ****** 標準 tk.Text 的狀態設定是直接用 state 參數 ******
-        self.details_note_textbox.configure(state="normal") # 暫時可編輯以插入內容和應用標籤
+        self.details_note_textbox.configure(state="normal")
         self.details_note_textbox.delete("1.0", tk.END)
-        self.details_note_textbox.insert("1.0", task['note'])
+        self.details_note_textbox.insert("1.0", task.get('note', ''))
 
-        # 查找並標記 URL
         self.find_and_tag_urls(self.details_note_textbox)
 
-        self.details_note_textbox.configure(state="disabled") # 設回唯讀
+        self.details_note_textbox.configure(state="disabled")
+
+        # self.details_image_value.configure(text=task.get('image_path', '') if task.get('image_path') else "無圖片")
 
 
     def clear_details_display(self):
         """清空詳細資訊顯示區域"""
+        self.details_creation_time_value.configure(text="")
         self.details_desc_value.configure(text="")
         self.details_date_value.configure(text="")
         self.details_status_value.configure(text="")
-        # ****** 清空標準 tk.Text widget ******
         self.details_note_textbox.configure(state="normal")
         self.details_note_textbox.delete("1.0", tk.END)
-        # 清除舊的 tag 綁定
         self.details_note_textbox.tag_remove("url", "1.0", tk.END)
         self.details_note_textbox.configure(state="disabled")
+        # self.details_image_value.configure(text="")
 
 
     def find_and_tag_urls(self, textbox):
         """在 Textbox 中查找 URL 並應用超連結標籤"""
-        # 清除之前可能存在的 "url" 標籤
         textbox.tag_remove("url", "1.0", tk.END)
-
-        # 設置 "url" 標籤的樣式
         textbox.tag_configure("url", foreground="blue", underline=True)
-
-        # 使用正則表達式查找 http 或 https 開頭的 URL
         url_pattern = re.compile(r'https?://[^\s]+')
+        content = textbox.get("1.0", tk.END).strip()
 
-        content = textbox.get("1.0", tk.END).strip() # 獲取內容並移除末尾可能的換行
-
-        # 查找所有匹配項
         for match in url_pattern.finditer(content):
-            start_char_index = match.start() # 絕對字元開始索引
-            end_char_index = match.end()   # 絕對字元結束索引
-
-            # 將絕對字元索引轉換為 Text widget 的 "line.column" 格式
-            # 使用 Text widget 的 index 方法可以處理這種轉換
-            # 確保轉換是針對當前 Textbox 的內容
+            start_char_index = match.start()
+            end_char_index = match.end()
             try:
                  start_index = textbox.index(f"1.0 + {start_char_index}c")
                  end_index = textbox.index(f"1.0 + {end_char_index}c")
             except tk.TclError:
-                 # 如果索引無效（例如內容在查找後被更改），跳過這個匹配
                  continue
 
-
-            # 添加 "url" 標籤到匹配到的文本範圍
             textbox.tag_add("url", start_index, end_index)
-
-            # 綁定滑鼠左鍵點擊事件到這個標籤
-            # 使用 lambda 來確保在點擊時傳遞正確的 URL
             url = match.group(0)
-            # 綁定到 Text widget 本身
             textbox.tag_bind("url", "<Button-1>", lambda e, target_url=url: self.open_url(target_url))
-
-            # 綁定滑鼠進入和離開事件來改變光標
-            # 綁定到 Text widget 本身
             textbox.tag_bind("url", "<Enter>", lambda e: textbox.config(cursor="hand2"))
             textbox.tag_bind("url", "<Leave>", lambda e: textbox.config(cursor=""))
 
@@ -702,23 +1146,19 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         try:
             webbrowser.open_new_tab(url)
             self.update_status(f"已打開網址: {url}")
+            self.log_operation(f"已打開網址: {url}")
         except Exception as e:
             messagebox.showerror("打開網址錯誤", f"無法打開網址 {url}: {e}")
+            self.log_operation(f"打開網址失敗 {url}: {e}")
 
-    def save_tasks_shortcut(self, event=None): # 接受 event 參數，因為綁定會傳遞
-        """Ctrl+S 快捷鍵儲存任務"""
-        save_tasks(self.tasks)
-        self.update_status("待辦事項已儲存 (Ctrl+S)。")
-        return "break" # 阻止事件繼續傳播
-
-    # ****** 新增匯出到 Excel 的方法 ******
+    # ****** 匯出到 Excel 的方法 ******
     def export_to_excel(self):
         """將待辦事項匯出為 Excel 檔案 (.xlsx)"""
         if not self.tasks:
             messagebox.showinfo("匯出", "目前沒有待辦事項可匯出。")
+            self.log_operation("嘗試匯出到 Excel 失敗：沒有待辦事項。")
             return
 
-        # 打開檔案儲存對話框
         filepath = filedialog.asksaveasfilename(
             defaultextension=".xlsx",
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
@@ -727,56 +1167,44 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
 
         if not filepath:
             self.update_status("匯出已取消。")
+            self.log_operation("匯出到 Excel 操作已取消。")
             return
 
+        self.update_status(f"匯出到 Excel 中...")
+        self.log_operation(f"開始匯出到 Excel 檔案：{filepath}")
         try:
-            # 創建新的 Excel 工作簿
             workbook = openpyxl.Workbook()
             sheet = workbook.active
             sheet.title = "待辦事項"
 
-            # 寫入表頭
-            headers = ["內容", "到期日", "狀態", "備註/網址"]
+            headers = ["ID", "內容", "到期日", "狀態", "備註/網址", "建立時間"] # 增加 ID 和建立時間列
             sheet.append(headers)
 
-            # 寫入待辦事項數據
             for task in self.tasks:
-                # 處理 None 值，確保可以寫入 Excel
+                task_id = task.get('id', '')
+                description = task.get('description', '')
                 due_date = task.get('due_date') if task.get('due_date') else ""
                 status = task.get('status') if task.get('status') in STATUS_OPTIONS else "未知狀態"
-                note = task.get('note') if task.get('note') is not None else "" # 確保 note 不是 None
+                note = task.get('note') if task.get('note') is not None else ""
+                creation_time = task.get('creation_time') if task.get('creation_time') else ""
 
-                sheet.append([task.get('description', ''), due_date, status, note])
+                sheet.append([task_id, description, due_date, status, note, creation_time])
 
-            # 自動調整列寬 (可選)
-            # for col in sheet.columns:
-            #     max_length = 0
-            #     column = col[0].column # Get the column number
-            #     for cell in col:
-            #         try: # Necessary to avoid error on empty cells
-            #             if len(str(cell.value)) > max_length:
-            #                 max_length = len(cell.value)
-            #         except:
-            #             pass
-            #     adjusted_width = (max_length + 2)
-            #     sheet.column_dimensions[openpyxl.utils.get_column_letter(column)].width = adjusted_width
-
-
-            # 儲存工作簿
             workbook.save(filepath)
 
             self.update_status(f"待辦事項已成功匯出到 {filepath}")
             messagebox.showinfo("匯出成功", f"待辦事項已成功匯出到\n{filepath}")
+            self.log_operation(f"成功匯出到 Excel 檔案：{filepath}")
 
         except Exception as e:
             self.update_status(f"匯出 Excel 時發生錯誤: {e}")
             messagebox.showerror("匯出錯誤", f"匯出 Excel 時發生錯誤:\n{e}")
+            self.log_operation(f"匯出到 Excel 失敗：{e}")
 
 
     def clear_input_fields(self):
         """清空輸入框內容"""
         self.desc_entry.delete(0, tk.END)
-        # 重設為今天日期
         self.date_display_label.configure(text=datetime.now().strftime('%Y-%m-%d'))
         self.note_textbox.delete("1.0", tk.END)
 
