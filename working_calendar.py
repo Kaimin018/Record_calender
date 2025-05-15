@@ -148,6 +148,10 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         self.log_entries = [] # 操作日誌列表
         self.show_on_hold = True # 控制是否顯示 On Hold 項目
         self._sort_direction = {} # Initialize sorting direction
+        # ****** 點擊 Treeview 標頭處理排序 ******
+        # ****** 實現 Treeview 排序邏輯 (包含在 populate_treeview 中應用) ******
+        self._sort_direction = {}  # 用於儲存每列的排序方向
+        self._sort_column = None  # 用於儲存當前排序列 ID
 
 
         # --- GUI 元件設定 ---
@@ -166,6 +170,7 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
             self.bind_all("<Command-KeyPress-s>", self.save_tasks_shortcut)
         else:  # Windows 或 Linux
             self.bind_all("<Control-KeyPress-s>", self.save_tasks_shortcut)
+            print("Windows/Linux detected, binding Ctrl+S") # 除錯用
 
 
         # 綁定 Enter 鍵到特定的處理函數
@@ -715,31 +720,24 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
     def _worker_save(self, tasks_to_save, completion_callback):
         """Worker function to run save_tasks in a separate thread."""
         try:
-            save_result = save_tasks(tasks_to_save) # Call save_tasks and get the raw result
+            save_result = save_tasks(tasks_to_save)  # 呼叫 save_tasks 函數
 
-            # ****** 根據 save_tasks 的返回值類型，正確設定 success 和 error ******
+            # 根據 save_tasks 的返回值類型，正確設定 success 和 error
             if isinstance(save_result, tuple) and len(save_result) == 2 and save_result[0] is False:
-                # This is the expected failure case (False, error)
                 success = False
                 error = save_result[1]
             elif save_result is True:
-                 # This is the expected success case (True)
-                 success = True
-                 error = None
+                success = True
+                error = None
             else:
-                 # Handle unexpected return value from save_tasks
-                 success = False
-                 error = f"Unexpected save result: {save_result}"
-                 print(f"DEBUG: Worker Save Error: {error}") # Log this internal worker error
+                success = False
+                error = f"Unexpected save result: {save_result}"
 
-
-            # Notify main thread using self.after
-            # Pass success (bool) and error (Exception object or None)
+            # 通知主執行緒
             self.after(0, completion_callback, success, error)
 
         except Exception as e:
-            # Catch any unexpected exceptions within the worker itself
-            print(f"Error in save worker thread (unexpected exception): {e}")
+            # 捕捉未預期的例外
             self.after(0, completion_callback, False, e)
 
 
@@ -762,18 +760,11 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         self.save_thread = None
 
         if success:
-            # 儲存成功後執行後續的 GUI 操作
-
-            # 再次延遲 populate_treeview 的執行，安排到主執行緒的下一個空閒時刻
-            self.after(0, self.populate_treeview)
-
-            # 延遲其他 GUI 操作
-            self.after(0, lambda: self.clear_input_fields())
-            self.after(0, lambda: self.cancel_edit())
-
-            # 顯示操作成功的訊息
-            self.after(0, lambda: self.update_status(user_message))
-            self.log_operation("背景儲存操作完成。")
+            # 儲存成功後更新介面
+            self.populate_treeview()
+            self.clear_input_fields()
+            self.cancel_edit()
+            self.update_status(user_message)
         else:
             # 儲存失敗的處理
             self.update_status(f"儲存失敗: {error}")
@@ -785,6 +776,7 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
         """Ctrl+S 快捷鍵儲存任務"""
         if self.editing_task_id is not None:
             self.save_task_gui()
+            print("儲存任務 (Ctrl+S)...success")
         else:
             self._start_save_thread(
                 tasks_to_save=list(self.tasks),
@@ -792,13 +784,9 @@ class TodoApp(customtkinter.CTk): # 繼承 customtkinter.CTk
                 completion_callback=lambda success, err: self.after(0, self._on_save_complete_gui, success, err, "待辦事項已儲存 (Ctrl+S)。")
             )
             self.log_operation("通過快捷鍵觸發儲存。")
+            print("儲存任務 (Ctrl+S)...")
         return "break" # 阻止事件繼續傳播
 
-
-    # ****** 點擊 Treeview 標頭處理排序 ******
-    # ****** 實現 Treeview 排序邏輯 (包含在 populate_treeview 中應用) ******
-    _sort_direction = {} # 用於儲存每列的排序方向
-    _sort_column = None # 用於儲存當前排序列 ID
 
     def on_treeview_heading_click(self, event):
         """處理 Treeview 標頭點擊事件，實現排序"""
