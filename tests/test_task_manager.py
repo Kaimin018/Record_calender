@@ -80,13 +80,13 @@ def test_delete_task_not_found(task_manager_instance):
 
 def test_get_tasks_by_status(task_manager_instance, mock_data_manager):
     """測試按狀態篩選任務。"""
-    task_manager_instance.add_task("Pending task 1")
-    task_manager_instance.update_task(1, "In progress task 1", status="In progress")
-    task_manager_instance.add_task("Pending task 2")
+    task1 = task_manager_instance.add_task("Pending task 1")
+    task_manager_instance.update_task(task1['id'], "In progress task 1", status="In progress")
+    task2 = task_manager_instance.add_task("Pending task 2")
 
     pending_tasks = task_manager_instance.get_tasks_by_status("Pending")
-    assert len(pending_tasks) == 2
-    assert pending_tasks[0]['description'] == "Pending task 1"
+    assert len(pending_tasks) == 1
+    assert pending_tasks[0]['description'] == "Pending task 2"
 
     in_progress_tasks = task_manager_instance.get_tasks_by_status("In progress")
     assert len(in_progress_tasks) == 1

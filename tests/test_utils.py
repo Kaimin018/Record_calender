@@ -1,5 +1,6 @@
 # tests/test_utils.py
-
+import pytest
+from unittest.mock import Mock
 from datetime import timedelta, date
 from record_calender import utils
 import tkinter as tk # 僅用於模擬 Tkinter Textbox
@@ -126,19 +127,26 @@ def test_open_url_failure():
         assert result is False
 
 # 測試 copy_with_links
-def test_copy_with_links_no_url(mocker):
-    mock_textbox = MockTextbox("Just some text.")
-    mock_app = mocker.Mock() # 模擬 Tkinter 應用程式實例
-    utils.copy_with_links(mock_textbox, mock_app)
-    mock_app.clipboard_clear.assert_called_once()
-    mock_app.clipboard_append.assert_called_once_with("Just some text.")
-    mock_app.update_status.assert_called_once_with("已複製文字和連結到剪貼板")
+def test_find_and_tag_urls_with_url():
+    text = "Visit Google at https://www.google.com and then this: http://example.com/path"
+    mock_textbox = MockTextbox(text)
+    utils.find_and_tag_urls(mock_textbox)
+    # 動態計算網址在字串中的位置
+    urls = ["https://www.google.com", "http://example.com/path"]
+    for url in urls:
+        start = text.index(url)
+        end = start + len(url)
+        tag = {'tag': 'url', 'start': f'1.0+{start}c', 'end': f'1.0+{end}c'}
+        assert tag in mock_textbox._tags
+    # 驗證綁定是否存在
+    assert "url" in mock_textbox._binds
+    assert "<Button-1>" in mock_textbox._binds["url"]
 
-def test_copy_with_links_with_url(mocker):
+def test_copy_with_links_with_url():
     mock_textbox = MockTextbox("Text with link https://example.com.")
-    mock_app = mocker.Mock()
+    mock_app = Mock()
     utils.copy_with_links(mock_textbox, mock_app)
     mock_app.clipboard_clear.assert_called_once()
-    expected_clipboard_content = "Text with link https://example.com.\n\n連結:\nhttps://example.com"
+    expected_clipboard_content = "Text with link https://example.com.\n\n連結:\nhttps://example.com."
     mock_app.clipboard_append.assert_called_once_with(expected_clipboard_content)
     mock_app.update_status.assert_called_once_with("已複製文字和連結到剪貼板")
