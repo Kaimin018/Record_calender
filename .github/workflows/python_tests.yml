@@ -27,13 +27,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 安裝你的 requirements.txt 中列出的所有依賴
         pip install -r requirements.txt
-        # 額外安裝 pytest 和 openpyxl (如果不在 requirements.txt 中)
         pip install pytest openpyxl
-        # Tkinter 通常內建於 Python 中，但如果是非標準環境，可能需要額外步驟來確保其可用性
-        # 對於 Ubuntu，如果遇到 Tkinter 缺失，可能需要 sudo apt-get install python3-tk
 
+
+    - name: Set PYTHONPATH
+      run: echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV # $GITHUB_WORKSPACE 是你的專案根目錄
+    
     - name: Run tests with pytest
       # 為了運行測試，你需要在 Record_calender/tests 目錄下
       # pytest 會自動發現 tests/ 目錄下的所有 test_*.py 檔案
