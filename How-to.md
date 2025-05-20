@@ -9,4 +9,8 @@ pip install -r .\requirement.txt
 
 # work on python
 
-py .\working_calendar.py
+python -m record_calender.main
+
+# test cases
+
+pytest tests

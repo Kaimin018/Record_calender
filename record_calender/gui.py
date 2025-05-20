@@ -1,6 +1,7 @@
 # record_calender/gui.py
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox, filedialog
 import customtkinter
 from tkcalendar import Calendar
@@ -547,7 +548,7 @@ class TodoApp(customtkinter.CTk):
             if "儲存中" not in current_status_text and "已儲存" not in current_status_text:
                 self.update_status(f"總計 {len(self.task_manager.get_tasks())} 個待辦事項。")
 
-        self.log_operation(f"Treeview 已重新填充並應用過濾/排序 ({len(tasks_to_display)}/{len(self.task_manager.get_tasks())} 總數顯示)。")
+        # self.log_operation(f"Treeview 已重新填充並應用過濾/排序 ({len(tasks_to_display)}/{len(self.task_manager.get_tasks())} 總數顯示)。")
 
     def load_task_for_editing(self, event=None):
         """從 Treeview 載入選取的任務到輸入框進行編輯"""
