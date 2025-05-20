@@ -1,7 +1,6 @@
 # tests/test_utils.py
 
-import pytest
-from datetime import datetime, date
+from datetime import timedelta, date
 from record_calender import utils
 import tkinter as tk # 僅用於模擬 Tkinter Textbox
 
