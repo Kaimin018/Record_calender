@@ -1,0 +1,41 @@
+# Record_calender/.github/workflows/python_tests.yml
+
+name: Python Tests
+
+on:
+  push:
+    branches:
+      - main
+      - master # 根據你的預設分支調整
+  pull_request:
+    branches:
+      - main
+      - master # 根據你的預設分支調整
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # 可以在 Windows/macOS 上運行，但 Ubuntu 通常更快且免費額度多
+
+    steps:
+    - uses: actions/checkout@v4 # 檢查出你的代碼
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9' # 或你專案實際使用的版本，例如 '3.10', '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # 安裝你的 requirements.txt 中列出的所有依賴
+        pip install -r requirements.txt
+        # 額外安裝 pytest 和 openpyxl (如果不在 requirements.txt 中)
+        pip install pytest openpyxl
+        # Tkinter 通常內建於 Python 中，但如果是非標準環境，可能需要額外步驟來確保其可用性
+        # 對於 Ubuntu，如果遇到 Tkinter 缺失，可能需要 sudo apt-get install python3-tk
+
+    - name: Run tests with pytest
+      # 為了運行測試，你需要在 Record_calender/tests 目錄下
+      # pytest 會自動發現 tests/ 目錄下的所有 test_*.py 檔案
+      run: |
+        pytest tests/
