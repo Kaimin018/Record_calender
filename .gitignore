@@ -1,5 +1,7 @@
+# Ignore Python bytecode files
 todo_calendar.json
 .pytest_cache/
 tests/__pycache__/
 __pycache__
 record_calender/__pycache__
+record_calender/__pycache__/gui.cpython-313.pyc

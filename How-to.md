@@ -14,3 +14,7 @@ python -m record_calender.main
 # test cases
 
 pytest tests
+
+# remove the file on Git but keep local file
+
+git rm --cached file_name 
